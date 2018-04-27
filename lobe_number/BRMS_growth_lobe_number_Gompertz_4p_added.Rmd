@@ -1,0 +1,1186 @@
+---
+title: "Brms_growth_lobe_number_Gompertz_4p"
+output: html_notebook
+---
+
+<br>
+
+**Go to the end of this file for the parameter estimates of the best fitted model on phenotype lobe number **
+
+fitting non-linear model with BRMS (Bayesian Regression Models using Stan)
+<br>
+
+```{r include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(magrittr)
+library(ggforce)
+library(gtable)
+library(brms)
+library(loo)
+library(mice)
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+options(max.print=999999)
+library(reshape2)
+library(DMwR)
+```
+
+
+```{r, message=FALSE}
+lobe.n <- read_csv("lobe.n.csv", col_types = list(col_character(), col_date(), col_double(), col_double()))
+lobe.n 
+
+sample.list <- unique(lobe.n$ID)
+```
+
+
+166 individuals at 4 time points
+```{r}
+ggplot(data=lobe.n, aes(x=days, y=lobe_n, group=ID)) +
+    geom_line(alpha=.1) + 
+    geom_point(size=.1, alpha=.05) +
+    ggtitle("lobe_number by days") 
+```
+
+
+```{r include=FALSE}
+# for fixing the bug of facet_wrap_paginate()
+facet_wrap_paginate <- function(facets, nrow = NULL, ncol = NULL, scales = "fixed",
+                                shrink = TRUE, labeller = "label_value", as.table = TRUE,
+                                switch = NULL, drop = TRUE, dir = "h", strip.position = 'top', page = 1) {
+  facet <- facet_wrap(facets, nrow = nrow, ncol = ncol, scales = scales,
+                      shrink = shrink, labeller = labeller, as.table = as.table,
+                      switch = switch, drop = drop, dir = dir,
+                      strip.position = strip.position)
+  if (is.null(nrow) || is.null(ncol)) {
+    facet
+  } else {
+    ggproto(NULL, FacetWrapPaginate, shrink = shrink,
+            params = c(facet$params, list(page = page)))
+  }
+}
+
+FacetWrapPaginate <- ggproto("FacetWrapPaginate", FacetWrap,
+                             setup_params = function(data, params) {
+                               modifyList(
+                                 params,
+                                 list(
+                                   max_rows = params$nrow,
+                                   nrow = NULL
+                                 )
+                               )
+                             },
+                             compute_layout = function(data, params) {
+                               layout <- FacetWrap$compute_layout(data, params)
+                               layout$page <- ceiling(layout$ROW / params$max_rows)
+                               layout
+                             },
+                             draw_panels = function(panels, layout, x_scales, y_scales, ranges, coord, data, theme, params) {
+                               include <- which(layout$page == params$page)
+                               panels <- panels[include]
+                               ranges <- ranges[include]
+                               layout <- layout[include, , drop = FALSE]
+                               layout$ROW <- layout$ROW - min(layout$ROW) + 1
+                               x_scale_ind <- unique(layout$SCALE_X)
+                               x_scales <- x_scales[x_scale_ind]
+                               layout$SCALE_X <- match(layout$SCALE_X, x_scale_ind)
+                               y_scale_ind <- unique(layout$SCALE_Y)
+                               y_scales <- y_scales[y_scale_ind]
+                               layout$SCALE_Y <- match(layout$SCALE_Y, y_scale_ind)
+                               table <- FacetWrap$draw_panels(panels, layout, x_scales, y_scales, ranges, coord, data, theme, params)
+                               if (max(layout$ROW) != params$max_rows) {
+                                 spacing <- theme$panel.spacing.y %||% theme$panel.spacing
+                                 missing_rows <- params$max_rows - max(layout$ROW)
+                                 strip_rows <- unique(table$layout$t[grepl('strip', table$layout$name) & table$layout$l %in% panel_cols(table)$l])
+                                 strip_rows <- strip_rows[as.numeric(table$heights[strip_rows]) != 0]
+                                 axis_b_rows <- unique(table$layout$t[grepl('axis-b', table$layout$name)])
+                                 axis_b_rows <- axis_b_rows[as.numeric(table$heights[axis_b_rows]) != 0]
+                                 axis_t_rows <- unique(table$layout$t[grepl('axis-t', table$layout$name)])
+                                 axis_t_rows <- axis_t_rows[as.numeric(table$heights[axis_t_rows]) != 0]
+                                 table <- gtable_add_rows(table, unit(missing_rows, 'null'))
+                                 table <- gtable_add_rows(table, spacing * missing_rows)
+                                 if (length(strip_rows) != 0) {
+                                   table <- gtable_add_rows(table, min(table$heights[strip_rows]) * missing_rows)
+                                 }
+                                 if (params$free$x) {
+                                   if (length(axis_b_rows) != 0) {
+                                     table <- gtable_add_rows(table, min(table$heights[axis_b_rows]) * missing_rows)
+                                   }
+                                   if (length(axis_t_rows) != 0) {
+                                     table <- gtable_add_rows(table, min(table$heights[axis_t_rows]) * missing_rows)
+                                   }
+                                 }
+                               }
+                               if (max(layout$COL) != params$ncol) {
+                                 spacing <- theme$panel.spacing.x %||% theme$panel.spacing
+                                 missing_cols <- params$ncol - max(layout$COL)
+                                 strip_cols <- unique(table$layout$t[grepl('strip', table$layout$name) & table$layout$t %in% panel_rows(table)$t])
+                                 strip_cols <- strip_cols[as.numeric(table$widths[strip_cols]) != 0]
+                                 axis_l_cols <- unique(table$layout$l[grepl('axis-l', table$layout$name)])
+                                 axis_l_cols <- axis_l_cols[as.numeric(table$widths[axis_l_cols]) != 0]
+                                 axis_r_cols <- unique(table$layout$l[grepl('axis-r', table$layout$name)])
+                                 axis_r_cols <- axis_r_cols[as.numeric(table$widths[axis_r_cols]) != 0]
+                                 table <- gtable_add_cols(table, unit(missing_cols, 'null'))
+                                 table <- gtable_add_cols(table, spacing * missing_cols)
+                                 if (length(strip_cols) != 0) {
+                                   table <- gtable_add_cols(table, min(table$widths[strip_cols]) * missing_cols)
+                                 }
+                                 if (params$free$y) {
+                                   if (length(axis_l_cols) != 0) {
+                                     table <- gtable_add_cols(table, min(table$widths[axis_l_cols]) * missing_cols)
+                                   }
+                                   if (length(axis_r_cols) != 0) {
+                                     table <- gtable_add_cols(table, min(table$widths[axis_r_cols]) * missing_cols)
+                                   }
+                                 }
+                               }
+                               table
+                             }
+)
+
+n_pages <- function(plot) {
+  page <- ggplot_build(plot)$layout$panel_layout$page
+  if (!is.null(page)) {
+    max(page)
+  } else {
+    NULL
+  }
+}
+```
+
+<br>
+#### Try Gompertz (4-parameter) Model (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.html) by using BRMS 
+<br>
+
+First set up the formula
+```{r}
+gompertz_4p.bf1 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-k*(days - I))), 
+  Hmax + Hmin + k + I ~ 1, #general model, paramters do not vary for individuals
+  nl=TRUE)
+```
+
+    Hmax, asymptotic height at which growth is zero
+    Hmin, lower asymptotic height
+    k, growth rate
+    I, time at the inflection point
+
+```{r}
+stat.data <- function(data) {
+  data %>% 
+  group_by(days) %>%
+  summarize(meadian=median(lobe_n),
+            max=max(lobe_n),
+            min=min(lobe_n),
+            sd=sd(lobe_n))
+}
+stat.data(lobe.n)
+```
+
+Priors.  Hmin and Hmax use median at start and end dates.
+
+```{r results='hide'}
+prior1 <- c(prior(normal(11,4), nlpar="Hmax"), 
+            prior(normal(0,3), nlpar="Hmin"),
+            prior(normal(1,1), nlpar="k"), 
+            prior(normal(150,10), nlpar="I"))
+
+fit1 <- brm(formula=gompertz_4p.bf1,
+            data=lobe.n,
+            prior=prior1)
+```
+
+```{r}
+summary(fit1, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit1)
+pairs(fit1)
+```
+
+<br>
+keep k positive.  Or more tightly constrain the priors on Hmax and Hmin.
+
+```{r results='hide'}
+prior2 <- c(prior(normal(11,4), nlpar="Hmax"), 
+            prior(normal(0,3), nlpar="Hmin"),
+            prior(normal(.5,1), nlpar="k", lb=0), 
+            prior(normal(150,10), nlpar="I"))
+
+fit2 <- brm(formula=gompertz_4p.bf1,
+            data=lobe.n,
+            prior=prior2)
+```
+
+```{r}
+summary(fit2, waic=TRUE, R2=TRUE)
+```
+
+
+```{r}
+plot(fit2)
+pairs(fit2)
+```
+<br>
+
+to make k a little bit reasonable
+
+```{r}
+gompertz_4p.bf2 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10)*(days - I))), 
+  Hmax + Hmin + k + I ~ 1, #general model, paramters do not vary for individuals
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior3 <- c(prior(normal(11,4), nlpar="Hmax"), 
+            prior(normal(0,3), nlpar="Hmin"),
+            prior(normal(.7,1), nlpar="k", lb=0), 
+            prior(normal(130,7), nlpar="I"),
+            prior(cauchy(0,1), class=sigma))
+
+fit3 <- brm(formula=gompertz_4p.bf2,
+              data=lobe.n,
+              prior=prior3)
+```
+
+```{r}
+summary(fit3, waic=TRUE, R2=TRUE)
+```
+
+
+```{r results='hide', fig.keep='all'}
+plot(fit3)
+pairs(fit3)
+```
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(lobe.n$days), max(lobe.n$days),1))
+fit3.fitted <-  cbind(newdata, fitted(fit3, newdata)) %>% as.tibble() %>%
+  rename(lobe_n=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+pl <- ggplot(aes(x=days, y=lobe_n),data=NULL)
+pl <- pl + geom_line(aes(group=ID), alpha=.1, data=lobe.n)
+pl + geom_line(color="skyblue", lwd=1.5, data=fit3.fitted)
+```
+
+<br>
+**Now try adding random effects for model parameters:**
+<br>
+
+What parameters do we think might be interesting to allow to vary?  Probably not Hmin.  Try making a series of plots to see how varying delta or k affects things:
+
+```{r}
+gompertz_4p.fn <- function(Hmax, Hmin, k, I, days) {
+    Hmin + (Hmax - Hmin) * exp(-exp(-(k/10)*(days - I))) 
+}
+
+for(I1 in seq(100,170,10)) {
+  for(k1 in seq(0,1,.2)) {
+  tmp.lobe.n <- gompertz_4p.fn(Hmax=11,
+                               Hmin=0,
+                               k=k1,
+                               I=I1,
+                              days=newdata$days)
+  abc <- data.frame(newdata$days, tmp.lobe.n)
+  p <- ggplot(data=abc, aes(newdata$days, tmp.lobe.n)) +
+    geom_line() + ylim(0,20) + ggtitle(paste0("I=",I1," k=",k1))
+  print(p)
+  }
+}
+```
+<br>
+
+ 
+First try with only fixing Hmin
+```{r}
+gompertz_4p.bf3 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10)*(days - I))), 
+  Hmax + k + I ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE) 
+```
+
+
+```{r results='hide'}
+prior4 <- c(prior(normal(11,4), nlpar="Hmin"),
+            prior(normal(0,3), nlpar="Hmax"),
+            prior(normal(1,.5), nlpar="k", lb=0),
+            prior(normal(130,10), nlpar="I"),
+            prior(cauchy(0,1), class=sigma),
+            prior(cauchy(0,3), class=sd, nlpar="Hmax"),
+            prior(cauchy(0,10), class=sd, nlpar="I"),
+            prior(cauchy(0,1), class=sd, nlpar="k"))
+
+fit5 <- brm(formula=gompertz_4p.bf3,
+            data=lobe.n,
+            prior=prior4, 
+            iter=5000)
+```
+
+
+```{r}
+#plot(fit5)
+```
+
+```{r}
+summary(fit5, waic=TRUE, R2=TRUE)
+```
+
+
+<br>
+
+get fitted values
+```{r}
+b <- lobe.n %>% ungroup()
+fit5.fitted <- cbind(b, fitted(fit5)) %>% as.tibble()
+fit5.fitted
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+plot.fitted <- function(fn) {
+  pl <- ggplot(fn, aes(x=days)) +
+  geom_line(aes(y=lobe_n), color="blue") +
+  geom_line(aes(y=Estimate),color="red") +
+  facet_wrap_paginate(~ID, ncol = 6, nrow = 5)
+pages <- n_pages(pl)
+
+lapply(seq_len(pages), 
+       function(i) {
+         ggplot(fn, aes(x=days)) +
+           geom_line(aes(y=lobe_n),color="blue") +
+           geom_line(aes(y=Estimate),color="red") +
+           facet_wrap_paginate(~ID, ncol = 6, nrow = 5, page=i)
+       }
+)
+}
+```
+
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.fitted)
+```
+
+plot fitted vs actual:
+```{r}
+plot.fitted.actual <- function(fn) {
+  
+  r_squared <- summary(lm(Estimate ~ lobe_n, data=fn))$adj.r.squared
+  r_squared <- round(r_squared, digits = 4)
+
+  fn %>%
+    mutate(days=as.factor(days)) %>%
+    ggplot(aes(x=lobe_n, y=Estimate, shape=days, color=days)) +
+    geom_point() +
+    geom_abline(intercept = 0, slope=1) +
+    scale_x_continuous(breaks = c(0,2,4,6,8,10,12,14,16,18,20)) +
+    ggtitle(paste0("R2 = ",r_squared))
+
+}
+
+total_sum_of_squared_residuals <- function(fn) {anova(lm(Estimate ~ lobe_n, data=fn))[2,2]}
+```
+
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual(fit5.fitted)
+```
+
+cv
+```{r}
+SSR.fit <- total_sum_of_squared_residuals(fit5.fitted)
+waic.fit <- round(waic(fit5)$waic, digits=2)
+#kfoldic.fit <- round(kfold(fit5)$kfoldic, digits=2)
+```
+
+
+### lobe.n.mean
+
+```{r, message=FALSE}
+lobe.n.mean <- read_csv("lobe.n.mean.csv")
+lobe.n.mean
+```
+
+
+```{r results='hide', fig.keep='all'}
+ lapply(1:6, function(i) {
+       ggplot(aes(x=days, group=ID), data=lobe.n.mean) +
+         geom_line(aes(y=lobe_n), color="red") +   #red: modified data
+         geom_line(aes(y=lobe_n_raw), color="black") +
+          facet_wrap_paginate(~ID, ncol = 6, nrow = 5,  page =i)
+}
+)
+```
+
+<br>
+
+#### Try Gompertz with 4-parameter (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.html) by using BRMS 
+
+<br>
+
+First set up the formula
+```{r}
+gompertz_4p.bf1 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-k*(days - I))), 
+  Hmax + Hmin + k + I ~ 1, #general model, paramters do not vary for individuals
+  nl=TRUE)
+```
+
+```{r}
+stat.data(lobe.n.mean)
+stat.data(lobe.n)
+```
+
+Priors.  Hmin and Hmax use median at start and end dates.
+
+```{r results='hide'}
+prior1.mean <- c(prior(normal(11,3), nlpar="Hmax"), 
+                 prior(normal(0,3), nlpar="Hmin"),
+                 prior(normal(1,1), nlpar="k"), 
+                 prior(normal(130,10), nlpar="I"))
+
+fit1.mean <- brm(formula=gompertz_4p.bf1,
+                 data=lobe.n.mean,
+                 prior=prior1.mean)
+```
+
+```{r}
+summary(fit1.mean, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit1.mean)
+pairs(fit1.mean)
+```
+
+```{r results='hide'}
+prior2.mean <- c(prior(normal(11,3), nlpar="Hmax"), 
+                 prior(normal(0,3), nlpar="Hmin"),
+                 prior(normal(1,1), nlpar="k", lb=0), 
+                 prior(normal(130,10), nlpar="I"))
+
+fit2.mean <- brm(formula=gompertz_4p.bf1,
+                 data=lobe.n.mean,
+                 prior=prior2.mean)
+```
+
+```{r}
+summary(fit2.mean, waic=TRUE, R2=TRUE)
+```
+
+
+```{r results='hide', fig.keep='all'}
+plot(fit2.mean)
+pairs(fit2.mean)
+```
+
+
+```{r}
+gompertz_4p.bf2 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10) * (days - I))),
+  Hmax + Hmin + k + I ~ 1, 
+  nl=TRUE)
+```
+
+```{r results='hide'}
+prior3.mean <- c(prior(normal(11,3), nlpar="Hmax"), 
+                 prior(normal(0,3), nlpar="Hmin"),
+                 prior(normal(1,1), nlpar="k"), 
+                 prior(normal(130,10), nlpar="I"),
+                 prior(cauchy(0,1), class=sigma))
+
+fit3.mean <- brm(formula=gompertz_4p.bf2,
+                 data=lobe.n.mean,
+                 prior=prior3.mean)
+```
+
+```{r}
+summary(fit3.mean, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3.mean)
+pairs(fit3.mean)
+```
+
+<br>
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(lobe.n$days), max(lobe.n$days),1))
+fit3.mean.fitted <-  cbind(newdata, fitted(fit3.mean, newdata)) %>% as.tibble() %>%
+  rename(lobe_n=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r}
+(
+lobe.n.mean.curve <- ggplot(aes(x=days, y=lobe_n),data=NULL) +
+  geom_line(aes(group=ID), alpha=.1, data=lobe.n) +
+  geom_line(color="skyblue", lwd=1.5, data=fit3.mean.fitted) +
+  ggtitle("fitted curve using lobe number.mean") +
+  ylab("lobe number")
+)
+
+ggsave(filename="lobe.n.mean.curve.pdf", plot=lobe.n.mean.curve, 
+       width = 7, height = 5)
+```
+
+
+
+What parameters do we think might be interesting to allow to vary?  Probably not Hmin.  Try making a series of plots to see how varying delta or k affects things:
+```{r}
+lobe.n.fn <- function (Hmax, Hmin, k, delta, days) {
+  Hmax - (Hmax - Hmin) * exp(-(k/10^6) * (days^delta)) 
+}
+
+for(delta1 in seq(2,4,.25)) {
+  tmp.lobe.n <- lobe.n.fn(Hmax=8, 
+                          Hmin=-2, 
+                          k=.29, 
+                          delta=delta1, 
+                          days=newdata$days)
+   abc <- data.frame(newdata$days, tmp.lobe.n)
+   p <- ggplot(data=abc, aes(newdata$days, tmp.lobe.n)) +
+    geom_line() + ylim(0,40) + ggtitle("delta=",delta1)
+   print(p)
+}
+```
+
+```{r}
+for(k1 in seq(0,1,.25)) {
+  tmp.lobe.n <- lobe.n.fn(Hmax=8, 
+                          Hmin=-2, 
+                          k=k1, 
+                          delta=3, 
+                          days=newdata$days)
+   abc <- data.frame(newdata$days, tmp.lobe.n)
+   p <- ggplot(data=abc, aes(newdata$days, tmp.lobe.n)) +
+    geom_line() + ylim(0,40) + ggtitle("k=",k1)
+  print(p)
+}
+```
+
+
+```{r}
+gompertz_4p.bf3 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10) * (days - I))),
+  Hmax + k + I ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior4.mean <- c(prior(normal(11,3), nlpar="Hmin"),
+                 prior(normal(0,3), nlpar="Hmax"),
+                 prior(normal(1,.5), nlpar="k", lb=0),
+                 prior(normal(130,15), nlpar="I"),
+                 prior(cauchy(0,1), class=sigma),
+                 prior(cauchy(0,3), class=sd, nlpar="Hmax"),
+                 prior(cauchy(0,.5), class=sd, nlpar="k"),
+                 prior(cauchy(0,15), class=sd, nlpar="I"))
+
+fit5.mean <- brm(formula=gompertz_4p.bf3,
+                 data=lobe.n.mean,
+                 prior=prior4.mean,
+                 iter = 5000)
+```
+
+```{r}
+summary(fit5.mean, waic=TRUE, R2=TRUE)
+```
+
+
+```{r}
+#plot(fit5.mean)
+```
+
+get fitted values
+```{r}
+b <- lobe.n.mean %>% ungroup()
+fit5.mean.fitted <- cbind(b, fitted(fit5.mean)) %>% as.tibble()
+fit5.mean.fitted
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.mean.fitted)
+```
+
+plot fitted vs actual(modified)
+```{r results='hide', fig.keep='all'}
+lobe.n.mean.R2curve <- plot.fitted.actual(fit5.mean.fitted) +
+  xlab("observed(lobe_number.mean)") + ylab("predicted")
+
+ggsave(filename="lobe.n.mean.R2curve.pdf", plot=lobe.n.mean.R2curve, 
+       width = 7, height = 5)
+```
+
+plot fitted vs actual(raw)
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual.raw <- function(fn) {
+  
+  r_squared <- summary(lm(Estimate ~ lobe_n_raw, data=fn))$adj.r.squared
+  r_squared <- round(r_squared, digits=4)
+
+  fn %>%
+    mutate(days=as.factor(days)) %>%
+    ggplot(aes(x=lobe_n_raw, y=Estimate, shape=days, color=days)) +
+    geom_point() +
+    geom_abline(intercept = 0, slope=1) +
+    ggtitle(paste0("R2 = ",r_squared))
+
+}
+```
+
+```{r results='hide', fig.keep='all'}
+(
+lobe.n.mean.R2curve.raw <- plot.fitted.actual.raw(fit5.mean.fitted) +
+  xlab("observed (lobe number)") + ylab("predicted")
+)
+
+ggsave(filename="lobe.n.mean.R2curve.raw.pdf", plot=lobe.n.mean.R2curve.raw, 
+       width = 7, height = 5)
+```
+
+SSR on raw data set
+```{r}
+total_sum_of_squared_residuals_raw <- function(fn) {anova(lm(Estimate ~ lobe_n_raw, data=fn))[2,2]}
+
+SSR.fit.mean.raw <- total_sum_of_squared_residuals_raw(fit5.mean.fitted)
+```
+
+cv
+```{r}
+SSR.fit.mean <- total_sum_of_squared_residuals(fit5.mean.fitted)
+WAIC.fit.mean <- round(waic(fit5.mean)$waic, digits=2)
+#KFOLDIC.fit.mean <- round(kfold(fit5.mean)$kfoldic, digits=2)
+```
+
+
+<br>
+
+#### which fitted model is the better?
+
+<br>
+
+create an empty list for models
+```{r results='hide'}
+#2 models: fit, fit.mean
+
+cv.list <- data.frame()
+for (i in 1:2) {
+  for (j in 1:4) {
+    cv.list[i, j] <- 0
+  }
+}
+colnames(cv.list) <- c("SSR(raw)","SSR","WAIC","KFOLDIC")
+rownames(cv.list) <- c("fit", "fit.mean")
+```
+
+0) SSR on raw data set
+```{r}
+cv.list[2,1] <- SSR.fit.mean.raw
+```
+
+1) SSR
+```{r}
+cv.list[1,2] <- SSR.fit
+cv.list[2,2] <- SSR.fit.mean
+```
+
+2) CV
+
+**WAIC(Widely Applicable Information Criterion)**
+an extension of the Akaike Information Criterion (AIC) that is more fully Bayesian.
+
+**K-fold CV**
+Data are randomly partitioned into K subsets of equal size. Then the model is refit 10 times(default), each time leaving out one of the 10 subsets.
+
+
+```{r}
+cv.list[1,3] <- waic.fit
+cv.list[2,3] <- WAIC.fit.mean
+
+#cv.list[1,4] <- kfoldic.fit
+#cv.list[2,4] <- KFOLDIC.fit.mean
+```
+
+```{r}
+cv.list
+```
+
+#### parameter estimates of best fitted model on phenotype lobe number : take fit5.mean
+
+    read 
+    1) population (fixed) & group level (random) effects
+    2) parameters: Hmax, k & I of each genotype
+
+```{r}
+lobe.n.best.fitted <- fit5.mean$fit
+dimnames(lobe.n.best.fitted)
+```
+
+```{r}
+lobe.n.best.fitted.summary <- summary(lobe.n.best.fitted)$summary
+
+write.csv(lobe.n.best.fitted.summary, file = "/Users/seungmokim/Desktop/414_growth_model/lobe_number/lobe.n.best.fitted.summary.csv")
+``` 
+
+
+### lobe.n.mean.added(individual)
+
+Da-Ae, Da-Ol1 and F1 data added individually
+(e.g. Da-Ae_1, Da-Ae_2)
+
+```{r, message=FALSE}
+lobe.n.mean.added <- read_csv("lobe.n.mean.added(individual).csv")
+lobe.n.mean.added
+```
+
+<br>
+
+Try Gompertz with 4-parameter (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.html) by using BRMS 
+
+<br>
+
+First set up the formula
+```{r}
+gompertz_4p.bf1 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-k*(days - I))), 
+  Hmax + Hmin + k + I ~ 1, #general model, paramters do not vary for individuals
+  nl=TRUE)
+```
+
+```{r}
+stat.data(lobe.n.mean.added)
+stat.data(lobe.n.mean)
+```
+
+
+
+```{r}
+gompertz_4p.bf2 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10) * (days - I))),
+  Hmax + Hmin + k + I ~ 1, 
+  nl=TRUE)
+```
+
+```{r results='hide'}
+prior3.mean.added <- c(prior(normal(11,3), nlpar="Hmax"), 
+                       prior(normal(0,3), nlpar="Hmin"),
+                       prior(normal(1,1), nlpar="k"), 
+                       prior(normal(130,10), nlpar="I"),
+                       prior(cauchy(0,1), class=sigma))
+
+fit3.mean.added <- brm(formula=gompertz_4p.bf2,
+                       data=lobe.n.mean.added,
+                       prior=prior3.mean.added)
+```
+
+```{r}
+summary(fit3.mean.added, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3.mean.added)
+pairs(fit3.mean.added)
+```
+
+<br>
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(lobe.n.mean.added$days), max(lobe.n.mean.added$days),1))
+fit3.mean.added.fitted <-  cbind(newdata, fitted(fit3.mean.added, newdata)) %>% as.tibble() %>%
+  rename(lobe_n=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r}
+ggplot(aes(x=days, y=lobe_n),data=NULL) +
+  geom_line(aes(group=ID), alpha=.1, data=lobe.n) +
+  geom_line(color="skyblue", lwd=1.5, data=fit3.mean.added.fitted)
+```
+
+
+```{r}
+gompertz_4p.bf3 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10) * (days - I))),
+  Hmax + k + I ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior4.mean.added <- c(prior(normal(11,3), nlpar="Hmin"),
+                       prior(normal(0,3), nlpar="Hmax"),
+                       prior(normal(1,.5), nlpar="k", lb=0),
+                       prior(normal(130,15), nlpar="I"),
+                       prior(cauchy(0,1), class=sigma),
+                       prior(cauchy(0,3), class=sd, nlpar="Hmax"),
+                       prior(cauchy(0,.5), class=sd, nlpar="k"),
+                       prior(cauchy(0,15), class=sd, nlpar="I"))
+
+fit5.mean.added <- brm(formula=gompertz_4p.bf3,
+                       data=lobe.n.mean.added,
+                       prior=prior4.mean.added,
+                       iter = 5000)
+```
+
+```{r}
+summary(fit5.mean.added, waic=TRUE, R2=TRUE)
+```
+
+
+```{r}
+#plot(fit5.mean.added)
+```
+
+get fitted values
+```{r}
+b <- lobe.n.mean.added %>% ungroup()
+fit5.mean.added.fitted <- cbind(b, fitted(fit5.mean.added)) %>% as.tibble()
+fit5.mean.added.fitted
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.mean.added.fitted)
+```
+
+plot fitted vs actual(modified)
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual(fit5.mean.added.fitted)
+```
+
+#### parameter estimates of best fitted model on phenotype lobe number : take fit5.mean.added
+
+    read 
+    1) population (fixed) & group level (random) effects
+    2) parameters: Hmax, k & I of each genotype
+
+```{r}
+lobe.n.added.best.fitted <- fit5.mean.added$fit
+dimnames(lobe.n.added.best.fitted)
+```
+
+```{r}
+lobe.n.added.best.fitted.summary <- summary(lobe.n.added.best.fitted)$summary
+
+write.csv(lobe.n.added.best.fitted.summary, file = "/Users/seungmokim/Desktop/414_growth_model/lobe_number/lobe.n.added(individual).best.fitted.summary.csv")
+``` 
+
+<br>
+
+### lobe.n.mean.added(identical)
+
+Da-Ae, Da-Ol1 and F1 data added (e.g. Da-Ae_1 --> Da-Ae, Da-Ae_2 --> Da-Ae)
+
+```{r, message=FALSE}
+lobe.n.mean.added.ident <- read_csv("lobe.n.mean.added(identical).csv")
+lobe.n.mean.added.ident
+```
+
+<br>
+
+Try Gompertz with 4-parameter (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.html) by using BRMS 
+
+<br>
+
+First set up the formula
+```{r}
+gompertz_4p.bf1 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-k*(days - I))), 
+  Hmax + Hmin + k + I ~ 1, #general model, paramters do not vary for individuals
+  nl=TRUE)
+```
+
+```{r}
+stat.data(lobe.n.mean.added.ident)
+stat.data(lobe.n.mean)
+```
+
+
+
+```{r}
+gompertz_4p.bf2 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10) * (days - I))),
+  Hmax + Hmin + k + I ~ 1, 
+  nl=TRUE)
+```
+
+```{r results='hide'}
+prior3.mean.added.ident <- c(prior(normal(11,3), nlpar="Hmax"), 
+                             prior(normal(0,3), nlpar="Hmin"),
+                             prior(normal(1,1), nlpar="k"), 
+                             prior(normal(130,10), nlpar="I"),
+                             prior(cauchy(0,1), class=sigma))
+
+fit3.mean.added.ident <- brm(formula=gompertz_4p.bf2,
+                             data=lobe.n.mean.added.ident,
+                             prior=prior3.mean.added.ident)
+```
+
+```{r}
+summary(fit3.mean.added.ident, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3.mean.added.ident)
+pairs(fit3.mean.added.ident)
+```
+
+<br>
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(lobe.n.mean.added.ident$days), max(lobe.n.mean.added.ident$days),1))
+fit3.mean.added.ident.fitted <-  cbind(newdata, fitted(fit3.mean.added.ident, newdata)) %>% as.tibble() %>%
+  rename(lobe_n=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r}
+ggplot(aes(x=days, y=lobe_n),data=NULL) +
+  geom_line(aes(group=ID), alpha=.1, data=lobe.n) +
+  geom_line(color="skyblue", lwd=1.5, data=fit3.mean.added.ident.fitted)
+```
+
+
+```{r}
+gompertz_4p.bf3 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10) * (days - I))),
+  Hmax + k + I ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior4.mean.added.ident <- c(prior(normal(11,3), nlpar="Hmin"),
+                             prior(normal(0,3), nlpar="Hmax"),
+                             prior(normal(1,.5), nlpar="k", lb=0),
+                             prior(normal(130,15), nlpar="I"),
+                             prior(cauchy(0,1), class=sigma),
+                             prior(cauchy(0,3), class=sd, nlpar="Hmax"),
+                             prior(cauchy(0,.5), class=sd, nlpar="k"),
+                             prior(cauchy(0,15), class=sd, nlpar="I"))
+
+fit5.mean.added.ident <- brm(formula=gompertz_4p.bf3,
+                             data=lobe.n.mean.added.ident,
+                             prior=prior4.mean.added.ident,
+                             iter = 5000)
+```
+
+```{r}
+summary(fit5.mean.added.ident, waic=TRUE, R2=TRUE)
+```
+
+
+```{r}
+#plot(fit5.mean.added.ident)
+```
+
+get fitted values
+```{r}
+b <- lobe.n.mean.added.ident %>% ungroup()
+fit5.mean.added.ident.fitted <- cbind(b, fitted(fit5.mean.added.ident)) %>% as.tibble()
+fit5.mean.added.ident.fitted
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.mean.added.ident.fitted)
+```
+
+plot fitted vs actual(modified)
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual(fit5.mean.added.ident.fitted)
+```
+
+#### parameter estimates of best fitted model on phenotype lobe number : take fit5.mean.added.ident
+
+    read 
+    1) population (fixed) & group level (random) effects
+    2) parameters: Hmax, k & I of each genotype
+
+```{r}
+lobe.n.added.ident.best.fitted <- fit5.mean.added.ident$fit
+dimnames(lobe.n.added.ident.best.fitted)
+```
+
+```{r}
+lobe.n.added.ident.best.fitted.summary <- summary(lobe.n.added.ident.best.fitted)$summary
+
+write.csv(lobe.n.added.ident.best.fitted.summary, file = "/Users/seungmokim/Desktop/414_growth_model/lobe_number/lobe.n.added(identical).best.fitted.summary.csv")
+``` 
+
+<br>
+
+### lobe.n.mean.added(mean)
+
+taking mean values of replicates
+
+```{r, message=FALSE}
+lobe.n.mean.added.mean <- read_csv("lobe.n.mean.added(mean).csv")
+lobe.n.mean.added.mean
+```
+
+<br>
+
+Try Gompertz with 4-parameter (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.html) by using BRMS 
+
+<br>
+
+First set up the formula
+```{r}
+gompertz_4p.bf1 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-k*(days - I))), 
+  Hmax + Hmin + k + I ~ 1, #general model, paramters do not vary for individuals
+  nl=TRUE)
+```
+
+```{r}
+stat.data(lobe.n.mean.added.mean)
+stat.data(lobe.n.mean)
+```
+
+
+
+```{r}
+gompertz_4p.bf2 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10) * (days - I))),
+  Hmax + Hmin + k + I ~ 1, 
+  nl=TRUE)
+```
+
+```{r results='hide'}
+prior3.mean.added.mean <- c(prior(normal(11,3), nlpar="Hmax"), 
+                             prior(normal(0,3), nlpar="Hmin"),
+                             prior(normal(1,1), nlpar="k"), 
+                             prior(normal(130,10), nlpar="I"),
+                             prior(cauchy(0,1), class=sigma))
+
+fit3.mean.added.mean <- brm(formula=gompertz_4p.bf2,
+                             data=lobe.n.mean.added.mean,
+                             prior=prior3.mean.added.mean)
+```
+
+```{r}
+summary(fit3.mean.added.mean, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3.mean.added.mean)
+pairs(fit3.mean.added.mean)
+```
+
+<br>
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(lobe.n.mean.added.mean$days), max(lobe.n.mean.added.mean$days),1))
+fit3.mean.added.mean.fitted <-  cbind(newdata, fitted(fit3.mean.added.mean, newdata)) %>% as.tibble() %>%
+  rename(lobe_n=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r}
+ggplot(aes(x=days, y=lobe_n),data=NULL) +
+  geom_line(aes(group=ID), alpha=.1, data=lobe.n) +
+  geom_line(color="skyblue", lwd=1.5, data=fit3.mean.added.mean.fitted)
+```
+
+
+```{r}
+gompertz_4p.bf3 <- bf(
+  lobe_n ~ Hmin + (Hmax - Hmin) * exp(-exp(-(k/10) * (days - I))),
+  Hmax + k + I ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior4.mean.added.mean <- c(prior(normal(11,3), nlpar="Hmin"),
+                             prior(normal(0,3), nlpar="Hmax"),
+                             prior(normal(1,.5), nlpar="k", lb=0),
+                             prior(normal(130,15), nlpar="I"),
+                             prior(cauchy(0,1), class=sigma),
+                             prior(cauchy(0,3), class=sd, nlpar="Hmax"),
+                             prior(cauchy(0,.5), class=sd, nlpar="k"),
+                             prior(cauchy(0,15), class=sd, nlpar="I"))
+
+fit5.mean.added.mean <- brm(formula=gompertz_4p.bf3,
+                             data=lobe.n.mean.added.mean,
+                             prior=prior4.mean.added.mean,
+                             iter = 5000)
+```
+
+```{r}
+summary(fit5.mean.added.mean, waic=TRUE, R2=TRUE)
+```
+
+
+```{r}
+#plot(fit5.mean.added.mean)
+```
+
+get fitted values
+```{r}
+b <- lobe.n.mean.added.mean %>% ungroup()
+fit5.mean.added.mean.fitted <- cbind(b, fitted(fit5.mean.added.mean)) %>% as.tibble()
+fit5.mean.added.mean.fitted
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.mean.added.mean.fitted)
+```
+
+plot fitted vs actual(modified)
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual(fit5.mean.added.mean.fitted)
+```
+
+#### parameter estimates of best fitted model on phenotype lobe number : take fit5.mean.added.ident
+
+    read 
+    1) population (fixed) & group level (random) effects
+    2) parameters: Hmax, k & I of each genotype
+
+```{r}
+lobe.n.added.mean.best.fitted <- fit5.mean.added.mean$fit
+dimnames(lobe.n.added.mean.best.fitted)
+```
+
+```{r}
+lobe.n.added.mean.best.fitted.summary <- summary(lobe.n.added.mean.best.fitted)$summary
+
+write.csv(lobe.n.added.mean.best.fitted.summary, file = "/Users/seungmokim/Desktop/414_growth_model/lobe_number/lobe.n.added(mean).best.fitted.summary.csv")
+``` 
+
+
+
+
+
+
+
+
+
