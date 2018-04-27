@@ -1,0 +1,1130 @@
+---
+title: "Brms_growth_width_Weibull"
+output: html_notebook
+---
+
+<br>
+
+**Go to the end of this file for the parameter estimates of the best fitted model on phenotype width**
+<br>
+
+Trying to fit non-linear model with BRMS(Bayesian Regression Models using Stan)
+<br>
+
+```{r include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(magrittr)
+library(ggforce)
+library(gtable)
+library(brms)
+library(loo)
+library(mice)
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+options(max.print=999999)
+library(reshape2)
+library(DMwR)
+```
+
+```{r message=FALSE}
+widths <- read_csv("widths.csv")
+widths
+
+sample.list <- unique(widths$ID)
+```
+
+
+```{r results='hide', fig.keep='all'}
+ggplot(data=widths, aes(x=days, y=width, group=ID)) +
+    geom_line(alpha=.1) + 
+    geom_point(size=.1, alpha=.05) +
+    ggtitle("width by days")
+```
+
+```{r include=FALSE}
+# for fixing the bug of facet_wrap_paginate()
+facet_wrap_paginate <- function(facets, nrow = NULL, ncol = NULL, scales = "fixed",
+                                shrink = TRUE, labeller = "label_value", as.table = TRUE,
+                                switch = NULL, drop = TRUE, dir = "h", strip.position = 'top', page = 1) {
+  facet <- facet_wrap(facets, nrow = nrow, ncol = ncol, scales = scales,
+                      shrink = shrink, labeller = labeller, as.table = as.table,
+                      switch = switch, drop = drop, dir = dir,
+                      strip.position = strip.position)
+  if (is.null(nrow) || is.null(ncol)) {
+    facet
+  } else {
+    ggproto(NULL, FacetWrapPaginate, shrink = shrink,
+            params = c(facet$params, list(page = page)))
+  }
+}
+
+FacetWrapPaginate <- ggproto("FacetWrapPaginate", FacetWrap,
+                             setup_params = function(data, params) {
+                               modifyList(
+                                 params,
+                                 list(
+                                   max_rows = params$nrow,
+                                   nrow = NULL
+                                 )
+                               )
+                             },
+                             compute_layout = function(data, params) {
+                               layout <- FacetWrap$compute_layout(data, params)
+                               layout$page <- ceiling(layout$ROW / params$max_rows)
+                               layout
+                             },
+                             draw_panels = function(panels, layout, x_scales, y_scales, ranges, coord, data, theme, params) {
+                               include <- which(layout$page == params$page)
+                               panels <- panels[include]
+                               ranges <- ranges[include]
+                               layout <- layout[include, , drop = FALSE]
+                               layout$ROW <- layout$ROW - min(layout$ROW) + 1
+                               x_scale_ind <- unique(layout$SCALE_X)
+                               x_scales <- x_scales[x_scale_ind]
+                               layout$SCALE_X <- match(layout$SCALE_X, x_scale_ind)
+                               y_scale_ind <- unique(layout$SCALE_Y)
+                               y_scales <- y_scales[y_scale_ind]
+                               layout$SCALE_Y <- match(layout$SCALE_Y, y_scale_ind)
+                               table <- FacetWrap$draw_panels(panels, layout, x_scales, y_scales, ranges, coord, data, theme, params)
+                               if (max(layout$ROW) != params$max_rows) {
+                                 spacing <- theme$panel.spacing.y %||% theme$panel.spacing
+                                 missing_rows <- params$max_rows - max(layout$ROW)
+                                 strip_rows <- unique(table$layout$t[grepl('strip', table$layout$name) & table$layout$l %in% panel_cols(table)$l])
+                                 strip_rows <- strip_rows[as.numeric(table$heights[strip_rows]) != 0]
+                                 axis_b_rows <- unique(table$layout$t[grepl('axis-b', table$layout$name)])
+                                 axis_b_rows <- axis_b_rows[as.numeric(table$heights[axis_b_rows]) != 0]
+                                 axis_t_rows <- unique(table$layout$t[grepl('axis-t', table$layout$name)])
+                                 axis_t_rows <- axis_t_rows[as.numeric(table$heights[axis_t_rows]) != 0]
+                                 table <- gtable_add_rows(table, unit(missing_rows, 'null'))
+                                 table <- gtable_add_rows(table, spacing * missing_rows)
+                                 if (length(strip_rows) != 0) {
+                                   table <- gtable_add_rows(table, min(table$heights[strip_rows]) * missing_rows)
+                                 }
+                                 if (params$free$x) {
+                                   if (length(axis_b_rows) != 0) {
+                                     table <- gtable_add_rows(table, min(table$heights[axis_b_rows]) * missing_rows)
+                                   }
+                                   if (length(axis_t_rows) != 0) {
+                                     table <- gtable_add_rows(table, min(table$heights[axis_t_rows]) * missing_rows)
+                                   }
+                                 }
+                               }
+                               if (max(layout$COL) != params$ncol) {
+                                 spacing <- theme$panel.spacing.x %||% theme$panel.spacing
+                                 missing_cols <- params$ncol - max(layout$COL)
+                                 strip_cols <- unique(table$layout$t[grepl('strip', table$layout$name) & table$layout$t %in% panel_rows(table)$t])
+                                 strip_cols <- strip_cols[as.numeric(table$widths[strip_cols]) != 0]
+                                 axis_l_cols <- unique(table$layout$l[grepl('axis-l', table$layout$name)])
+                                 axis_l_cols <- axis_l_cols[as.numeric(table$widths[axis_l_cols]) != 0]
+                                 axis_r_cols <- unique(table$layout$l[grepl('axis-r', table$layout$name)])
+                                 axis_r_cols <- axis_r_cols[as.numeric(table$widths[axis_r_cols]) != 0]
+                                 table <- gtable_add_cols(table, unit(missing_cols, 'null'))
+                                 table <- gtable_add_cols(table, spacing * missing_cols)
+                                 if (length(strip_cols) != 0) {
+                                   table <- gtable_add_cols(table, min(table$widths[strip_cols]) * missing_cols)
+                                 }
+                                 if (params$free$y) {
+                                   if (length(axis_l_cols) != 0) {
+                                     table <- gtable_add_cols(table, min(table$widths[axis_l_cols]) * missing_cols)
+                                   }
+                                   if (length(axis_r_cols) != 0) {
+                                     table <- gtable_add_cols(table, min(table$widths[axis_r_cols]) * missing_cols)
+                                   }
+                                 }
+                               }
+                               table
+                             }
+)
+
+n_pages <- function(plot) {
+  page <- ggplot_build(plot)$layout$panel_layout$page
+  if (!is.null(page)) {
+    max(page)
+  } else {
+    NULL
+  }
+}
+```
+
+
+```{r results='hide', fig.keep='all'}
+lapply(1:6, function(i) {
+    ggplot(widths) +
+      geom_line(aes(x=days, y=width, group=ID)) +
+      facet_wrap_paginate(~ID, ncol = 6, nrow = 5,  page =i)
+    }
+)
+```
+<br>
+
+#### Try weibull (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.htm ) 
+<br><br>
+
+First set up the formula
+```{r}
+weibull.bf1 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-(k*days)^delta), #Weibull model
+  Hmax + Hmin + k + delta ~ 1, #general model, paramters do not vary for individuals
+  nl=TRUE)
+```
+
+Priors.  Hmin and Hmax use median at start and end dates.
+```{r}
+stat.data <- function(data) {
+  data %>% 
+  group_by(days) %>%
+  summarize(meadian=median(width),
+            max=max(width),
+            min=min(width),
+            sd=sd(width))
+}
+```
+
+```{r}
+stat.data(widths)
+```
+
+```{r results='hide'}
+prior1 <- c(prior(normal(42,10), nlpar="Hmin"),
+            prior(normal(62,7), nlpar="Hmax"),
+            prior(normal(1,1), nlpar="k"),
+            prior(normal(2,1), nlpar="delta"))
+
+fit1 <- brm(formula=weibull.bf1,
+            data=widths,
+            prior=prior1)
+```
+
+```{r}
+summary(fit1, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit1)
+pairs(fit1)
+```
+
+So with these priors it seems that the model can flip between having high and low Hmin and Hmax.  This relates to the delta parameter flipping signs.  So one possibility is to keep delta positive.  Or more tightly constrain the priors on Hmax and Hmin.
+
+```{r results='hide'}
+prior2 <- c(prior(normal(42,10), nlpar="Hmin"),
+            prior(normal(62,7),nlpar="Hmax"),
+            prior(normal(1,1),nlpar="k"),
+            prior(normal(2,1),nlpar="delta", lb=0))
+
+fit2 <- brm(formula=weibull.bf1,
+            data=widths,
+            prior=prior2)
+```
+
+```{r}
+summary(fit2, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit2)
+pairs(fit2)
+```
+
+<br>
+rescale k to get it more reasonable
+<br>
+
+```{r}
+weibull.bf2 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta), #Weibull model
+  Hmax + Hmin + k + delta ~ 1, #general model, paramters do not vary for individuals
+  nl=TRUE)
+```
+
+```{r results='hide'}
+prior3 <- c(prior(normal(20,10), nlpar="Hmin"),
+            prior(normal(60,7), nlpar="Hmax"),
+            prior(normal(.9,1), nlpar="k"),
+            prior(normal(4,1), nlpar="delta", lb=0))
+
+fit3 <- brm(formula=weibull.bf2,
+            data=widths,
+            prior=prior3)
+```
+
+```{r}
+summary(fit3, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3)
+pairs(fit3)
+```
+
+<br>
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(widths$days), max(widths$days),1))
+fit3.fitted <-  cbind(newdata, fitted(fit3, newdata)) %>% as.tibble() %>%
+  rename(width=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+pl <- ggplot(aes(x=days, y=width),data=NULL)
+pl <- pl + geom_line(aes(group=ID), alpha=.2, data=widths)
+pl + geom_line(color="skyblue", lwd=1.5, data=fit3.fitted)
+```
+
+<br>
+Now try adding random effects for model parameters:
+<br>
+
+What parameters do we think might be interesting to allow to vary?  Probably not Hmin.  Try making a series of plots to see how varying delta or k affects things:
+
+```{r}
+weibull.fn <- function(Hmax,Hmin,k,delta,days) {
+    Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta) #Weibull model
+}
+
+for(delta1 in seq(3,5,.25)) {
+  tmp.widths <- weibull.fn(Hmax=62,
+                           Hmin=20,
+                           k=.7,
+                           delta=delta1,
+                           days=newdata$days)
+  abc <- data.frame(newdata$days, tmp.widths)
+  p <- ggplot(data=abc, aes(newdata$days, tmp.widths)) +
+    geom_line() + ylim(0,100) + ggtitle("delta=",delta1)
+  print(p)
+}
+```
+
+```{r}
+for(k1 in seq(.5,1.5,.1)) {
+  tmp.widths <- weibull.fn(Hmax=60,
+                           Hmin=20,
+                           k=k1,
+                           delta=4,
+                           days=newdata$days)
+  abc <- data.frame(newdata$days, tmp.widths)
+  p <- ggplot(data=abc, aes(newdata$days, tmp.widths)) +
+    geom_line() + ylim(0,80) + ggtitle("k=",k1)
+  print(p)
+}
+```
+
+<br>
+First try with only fixing Hmin
+```{r}
+weibull.bf3 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta), #Weibull model
+  Hmax + k + delta ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+```{r results='hide'}
+prior4 <- c(prior(normal(42,10), nlpar="Hmin"),
+            prior(normal(62,7), nlpar="Hmax"),
+            prior(normal(1,1), nlpar="k"),
+            prior(normal(8,.5), nlpar="delta", lb=0),
+            prior(cauchy(0,1), class=sigma),
+            prior(cauchy(0,7), class=sd, nlpar="Hmax"),
+            prior(cauchy(0,.5), class=sd, nlpar="delta"),
+            prior(cauchy(0,1), class=sd, nlpar="k"))
+
+fit5 <- brm(formula = weibull.bf3,
+            data=widths,
+            prior=prior4,
+            iter=5000)
+```
+
+```{r}
+summary(fit5, waic=TRUE, R2=TRUE)
+```
+
+<br>
+
+get fitted values
+```{r}
+b <- widths %>% ungroup()
+fit5.fitted <- cbind(b, fitted(fit5)) %>% as.tibble()
+fit5.fitted
+```
+
+plot
+
+```{r results='hide', fig.keep='all'}
+plot.fitted <- function(fitted.data) {
+   pl <- ggplot(fitted.data, aes(x=days)) +
+     geom_line(aes(y=width),color="blue") +
+     geom_line(aes(y=Estimate),color="red") +
+     facet_wrap_paginate(~ID, ncol = 6, nrow = 5)
+   pages <- n_pages(pl)
+
+   lapply(seq_len(pages), 
+          function(i) {
+            ggplot(fitted.data, aes(x=days)) +
+              geom_line(aes(y=width), color="blue") +
+              geom_line(aes(y=Estimate), color="red") +
+              facet_wrap_paginate(~ID, ncol = 6, nrow = 5, page=i)
+          }
+    )
+}
+
+plot.fitted(fit5.fitted)
+```
+
+plot fitted vs actual:
+```{r}
+plot.fitted.actual <- function(fn) {
+  
+  r_squared <- summary(lm(Estimate ~ width, data=fn))$adj.r.squared
+  r_squared <- round(r_squared, digits=4)
+
+  fn %>%
+    mutate(days=as.factor(days)) %>%
+    ggplot(aes(x=width, y=Estimate, shape=days, color=days)) +
+    geom_point() +
+    geom_abline(intercept = 0, slope=1) +
+    ggtitle(paste0("R2 = ",r_squared))
+
+}
+```
+
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual(fit5.fitted)
+```
+
+```{r}
+total_sum_of_squared_residuals <- function(fn) {anova(lm(Estimate ~ width, data=fn))[2,2]}
+```
+
+cv
+```{r message=FALSE}
+TSSR.fit <- total_sum_of_squared_residuals(fit5.fitted)
+waic.fit <- round(waic(fit5)$waic, digits=2)
+#kfoldic.fit <- round(kfold(fit5)$kfoldic, digits=2)
+```
+
+<br>
+
+### widths.mean
+
+```{r, message=FALSE}
+widths.mean <- read_csv("widths.mean.csv")
+widths.mean
+```
+
+```{r results='hide', fig.keep='all'}
+lapply(1:6, function(i) {
+       ggplot(aes(x=days, group=ID), data=widths.mean) +
+         geom_line(aes(y=width), color="red") +
+         geom_line(aes(y=width_raw), color="black") +
+          facet_wrap_paginate(~ID, ncol = 6, nrow = 5,  page =i)
+}
+)
+```
+
+#### Try weibull (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.htm ) 
+<br>
+
+```{r}
+stat.data(widths.mean) 
+stat.data(widths) 
+```
+
+```{r results='hide'}
+weibull.bf2 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta),
+  Hmax + Hmin + k + delta ~ 1, #paramters do not vary for individuals
+  nl=TRUE)
+
+prior3.mean <- c(prior(normal(40,10), nlpar="Hmin"),
+                 prior(normal(65,7), nlpar="Hmax"),
+                 prior(normal(1,1), nlpar="k"),
+                 prior(normal(4,1), nlpar="delta", lb=0))
+
+fit3.mean <- brm(formula=weibull.bf2,
+                 data=widths.mean,
+                 prior=prior3.mean)
+```
+
+```{r}
+summary(fit3.mean, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3.mean)
+pairs(fit3.mean)
+```
+
+
+<br>
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(widths.mean$days), max(widths.mean$days),1))
+fit3.mean.fitted <-  cbind(newdata, fitted(fit3.mean, newdata)) %>%
+  as.tibble() %>%
+  rename(width=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+(
+width.mean.curve <- ggplot(aes(x=days, y=width),data=NULL) +
+  geom_line(aes(group=ID), linetype="longdash", alpha=.1, data=widths.mean) +
+  geom_line(color="skyblue", lwd=1.5, data=fit3.mean.fitted) +
+  ggtitle("fitted curve using width.mean")
+)
+   
+ggsave(filename="width.mean.curve.pdf", plot=width.mean.curve, 
+       width = 7, height = 5)
+```
+<br>
+
+**Now try adding random effects for model parameters:**
+<br>
+
+What parameters do we think might be interesting to allow to vary?  Probably not Hmin.  Try making a series of plots to see how varying delta or k affects things:
+
+```{r}
+weibull.fn <- function(Hmax,Hmin,k,delta,days) {
+    Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta) #Weibull model
+}
+
+for(delta1 in seq(3,8,.5)) {
+  tmp.widths <- weibull.fn(Hmax=65,
+                            Hmin=40,
+                            k=1,
+                            delta=delta1,
+                            days=newdata$days)
+   abc <- data.frame(newdata$days, tmp.widths)
+  p <- ggplot(data=abc, aes(newdata$days, tmp.widths)) +
+    geom_line() + ylim(0,80) + ggtitle("delta=",delta1)
+  print(p)
+}
+```
+
+```{r}
+for(k1 in seq(0,5,.5)) {
+  tmp.width <- weibull.fn(Hmax=65,
+                            Hmin=40,
+                            k=k1,
+                            delta=5,
+                            days=newdata$days)
+  abc <- data.frame(newdata$days, tmp.widths)
+  p <- ggplot(data=abc, aes(newdata$days, tmp.widths)) +
+    geom_line() + ylim(0,80) + ggtitle("k=",k1)
+  print(p)
+}
+```
+<br>
+
+try with only fixing Hmin
+
+```{r}
+weibull.bf3 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta), #Weibull model
+  Hmax + k + delta ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior4.mean <- c(prior(normal(40,10), nlpar="Hmin"),
+                 prior(normal(65,7), nlpar="Hmax"),
+                 prior(normal(1,1), nlpar="k"),
+                 prior(normal(8,.5), nlpar="delta", lb=0),
+                 prior(cauchy(0,1), class=sigma),
+                 prior(cauchy(0,7), class=sd, nlpar="Hmax"),
+                 prior(cauchy(0,.5), class=sd, nlpar="delta"),
+                 prior(cauchy(0,1), class=sd, nlpar="k"))
+
+fit5.mean <- brm(formula=weibull.bf3,
+                 data=widths.mean,
+                 prior=prior4.mean,
+                 iter=5000)
+```
+
+```{r}
+summary(fit5.mean, waic=TRUE, R2=TRUE)
+```
+
+```{r}
+#plot(fit5.mean)
+```
+<br>
+
+get fitted values
+```{r}
+b <- widths.mean %>% ungroup()
+fit5.mean.fitted <- cbind(b, fitted(fit5.mean)) %>% as.tibble()
+fit5.mean.fitted
+```
+
+plot
+
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.mean.fitted)
+```
+
+plot fitted vs actual(modified):
+```{r results='hide', fig.keep='all'}
+(
+width.mean.R2curve <- plot.fitted.actual(fit5.mean.fitted) +
+  xlab("observed (width.mean)") + ylab("predicted")
+)
+
+ggsave(filename="width.mean.R2curve.pdf", plot=width.mean.R2curve, 
+       width = 7, height = 5)
+```
+
+plot fitted vs actual(raw):
+```{r}
+plot.fitted.actual.raw <- function(fn) {
+  
+  r_squared <- summary(lm(Estimate ~ width_raw, data=fn))$adj.r.squared
+  r_squared <- round(r_squared, digits=4)
+
+  fn %>%
+    mutate(days=as.factor(days)) %>%
+    ggplot(aes(x=width_raw, y=Estimate, shape=days, color=days)) +
+    geom_point() +
+    geom_abline(intercept = 0, slope=1) +
+    ggtitle(paste0("R2 = ",r_squared)) +
+    xlab("observed (width)") + ylab("predicted")
+
+}
+```
+
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual.raw(fit5.mean.fitted)
+```
+
+TSSR on raw data set
+```{r}
+total_sum_of_squared_residuals_raw <- function(fn) {anova(lm(Estimate ~ width_raw, data=fn))[2,2]}
+
+TSSR.fit.mean.raw <- total_sum_of_squared_residuals_raw(fit5.mean.fitted)
+```
+
+cv
+```{r message=FALSE}
+TSSR.fit.mean <- total_sum_of_squared_residuals(fit5.mean.fitted)
+waic.fit.mean <- round(waic(fit5.mean)$waic, digits=2)
+#kfoldic.fit.mean <- round(kfold(fit5.mean)$kfoldic, digits=2)
+```
+
+
+<br>
+#### which fitted model is the better?
+<br>
+
+create an empty list for models
+```{r results='hide'}
+#2 models: fit, fit.mean
+
+cv.list <- data.frame()
+for (i in 1:2) {
+  for (j in 1:4) {
+    cv.list[i, j] <- 0
+  }
+}
+colnames(cv.list) <- c("SSR(raw)", "SSR","WAIC", "KFOLDIC")
+rownames(cv.list) <- c("fit", "fit.mean")
+```
+
+0) TSSR on raw data set
+```{r}
+cv.list[2,1] <- TSSR.fit.mean.raw
+```
+
+1) TSSR
+```{r}
+cv.list[1,2] <- TSSR.fit
+cv.list[2,2] <- TSSR.fit.mean
+```
+
+2) CV
+
+**WAIC(Widely Applicable Information Criterion)**
+an extension of the Akaike Information Criterion (AIC) that is more fully Bayesian.
+
+**K-fold CV**
+Data are randomly partitioned into K subsets of equal size. Then the model is refit 10 times(default), each time leaving out one of the 10 subsets.
+
+
+```{r}
+cv.list[1,3] <- waic.fit
+cv.list[2,3] <- waic.fit.mean
+```
+
+```{r}
+#cv.list[1,4] <- kfoldic.fit
+#cv.list[2,4] <- kfoldic.fit.mean
+```
+
+```{r}
+cv.list
+```
+
+<br>
+#### parameter estimates of best fitted model on phenotype width : take fit5.mean
+<br>
+
+    read 
+    1) population (fixed) & group level (random) effects
+    2) parameters: Hmax, k & delta of each genotype
+
+```{r}
+width.best.fitted <- fit5.mean$fit
+dimnames(width.best.fitted)
+```
+
+```{r}
+width.best.fitted.summary <- summary(width.best.fitted)$summary
+
+write.csv(width.best.fitted.summary, file = "/Users/seungmokim/Desktop/414_growth_model/width/width.best.fitted.summary.csv")
+``` 
+
+
+### widths.mean.added(individual)
+
+Da-Ae, Da-Ol1 and F1 data added individually
+(e.g. Da-Ae_1, Da-Ae_2)
+
+```{r, message=FALSE}
+widths.mean.added <- read_csv("widths.mean.added(individual).csv")
+widths.mean.added
+```
+
+
+Try weibull (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.htm ) 
+<br>
+
+```{r}
+stat.data(widths.mean.added)
+stat.data(widths.mean) 
+```
+
+```{r results='hide'}
+weibull.bf2 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta),
+  Hmax + Hmin + k + delta ~ 1, #paramters do not vary for individuals
+  nl=TRUE)
+
+prior3.mean.added <- c(prior(normal(40,10), nlpar="Hmin"),
+                 prior(normal(65,7), nlpar="Hmax"),
+                 prior(normal(1,1), nlpar="k"),
+                 prior(normal(4,1), nlpar="delta", lb=0))
+
+fit3.mean.added <- brm(formula=weibull.bf2,
+                 data=widths.mean.added,
+                 prior=prior3.mean.added)
+```
+
+```{r}
+summary(fit3.mean.added, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3.mean.added)
+pairs(fit3.mean.added)
+```
+
+
+<br>
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(widths.mean.added$days), max(widths.mean.added$days),1))
+fit3.mean.added.fitted <-  cbind(newdata, fitted(fit3.mean.added, newdata)) %>%
+  as.tibble() %>%
+  rename(width=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+pl <- ggplot(aes(x=days, y=width),data=NULL)
+pl <- pl + geom_line(aes(group=ID), alpha=.1, data=widths.mean.added)
+pl + geom_line(color="skyblue", lwd=1.5, data=fit3.mean.added.fitted) +
+  ggtitle("width.mean vs. days")
+```
+<br>
+
+**Now try adding random effects for model parameters:**
+<br>
+
+
+<br>
+
+try with only fixing Hmin
+
+```{r}
+weibull.bf3 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta), #Weibull model
+  Hmax + k + delta ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior4.mean.added <- c(prior(normal(40,10), nlpar="Hmin"),
+                 prior(normal(65,7), nlpar="Hmax"),
+                 prior(normal(1,1), nlpar="k"),
+                 prior(normal(8,.5), nlpar="delta", lb=0),
+                 prior(cauchy(0,1), class=sigma),
+                 prior(cauchy(0,7), class=sd, nlpar="Hmax"),
+                 prior(cauchy(0,.5), class=sd, nlpar="delta"),
+                 prior(cauchy(0,1), class=sd, nlpar="k"))
+
+fit5.mean.added <- brm(formula=weibull.bf3,
+                 data=widths.mean.added,
+                 prior=prior4.mean.added,
+                 iter=5000)
+```
+
+```{r}
+summary(fit5.mean.added, waic=TRUE, R2=TRUE)
+```
+
+```{r}
+#plot(fit5.mean.added)
+```
+<br>
+
+get fitted values
+```{r}
+b <- widths.mean.added %>% ungroup()
+fit5.mean.added.fitted <- cbind(b, fitted(fit5.mean.added)) %>% as.tibble()
+fit5.mean.added.fitted
+```
+
+plot
+
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.mean.added.fitted)
+```
+
+plot fitted vs actual(modified):
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual(fit5.mean.added.fitted)
+```
+
+<br>
+#### parameter estimates of best fitted model on phenotype width : take fit5.mean.added
+<br>
+
+    read 
+    1) population (fixed) & group level (random) effects
+    2) parameters: Hmax, k & delta of each genotype
+
+```{r}
+width.added.best.fitted <- fit5.mean.added$fit
+dimnames(width.added.best.fitted)
+```
+
+```{r}
+width.added.best.fitted.summary <- summary(width.added.best.fitted)$summary
+
+write.csv(width.added.best.fitted.summary, file = "/Users/seungmokim/Desktop/414_growth_model/width/width.added(individual).best.fitted.summary.csv")
+``` 
+
+<br>
+
+### widths.mean.added(identical)
+
+Da-Ae, Da-Ol1 and F1 data added (e.g. Da-Ae_1 --> Da-Ae, Da-Ae_2 --> Da-Ae)
+
+```{r, message=FALSE}
+widths.mean.added.ident <- read_csv("widths.mean.added(identical).csv")
+widths.mean.added.ident
+```
+
+
+Try weibull (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.htm ) 
+<br>
+
+```{r}
+stat.data(widths.mean.added.ident)
+stat.data(widths.mean.added)
+stat.data(widths.mean) 
+```
+
+```{r results='hide'}
+weibull.bf2 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta),
+  Hmax + Hmin + k + delta ~ 1, #paramters do not vary for individuals
+  nl=TRUE)
+
+prior3.mean.added.ident <- c(prior(normal(40,10), nlpar="Hmin"),
+                             prior(normal(65,7), nlpar="Hmax"),
+                             prior(normal(1,1), nlpar="k"),
+                             prior(normal(4,1), nlpar="delta", lb=0))
+
+fit3.mean.added.ident <- brm(formula=weibull.bf2,
+                             data=widths.mean.added.ident,
+                             prior=prior3.mean.added.ident)
+```
+
+```{r}
+summary(fit3.mean.added.ident, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3.mean.added.ident)
+pairs(fit3.mean.added.ident)
+```
+
+
+<br>
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(widths.mean.added.ident$days), max(widths.mean.added.ident$days),1))
+fit3.mean.added.ident.fitted <-  cbind(newdata, fitted(fit3.mean.added.ident, newdata)) %>%
+  as.tibble() %>%
+  rename(width=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+pl <- ggplot(aes(x=days, y=width),data=NULL)
+pl <- pl + geom_line(aes(group=ID), alpha=.1, data=widths.mean.added.ident)
+pl + geom_line(color="skyblue", lwd=1.5, data=fit3.mean.added.ident.fitted) +
+  ggtitle("width.mean vs. days")
+```
+<br>
+
+**Now try adding random effects for model parameters:**
+<br>
+
+
+<br>
+
+try with only fixing Hmin
+
+```{r}
+weibull.bf3 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta), #Weibull model
+  Hmax + k + delta ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior4.mean.added.ident <- c(prior(normal(40,10), nlpar="Hmin"),
+                             prior(normal(65,7), nlpar="Hmax"),
+                             prior(normal(1,1), nlpar="k"),
+                             prior(normal(8,.5), nlpar="delta", lb=0),
+                             prior(cauchy(0,1), class=sigma),
+                             prior(cauchy(0,7), class=sd, nlpar="Hmax"),
+                             prior(cauchy(0,.5), class=sd, nlpar="delta"),
+                             prior(cauchy(0,1), class=sd, nlpar="k"))
+
+fit5.mean.added.ident <- brm(formula=weibull.bf3,
+                             data=widths.mean.added.ident,
+                             prior=prior4.mean.added.ident,
+                             iter=5000)
+```
+
+```{r}
+summary(fit5.mean.added.ident, waic=TRUE, R2=TRUE)
+```
+
+```{r}
+#plot(fit5.mean.added.ident)
+```
+<br>
+
+get fitted values
+```{r}
+b <- widths.mean.added.ident %>% ungroup()
+fit5.mean.added.ident.fitted <- cbind(b, fitted(fit5.mean.added.ident)) %>% as.tibble()
+fit5.mean.added.ident.fitted
+```
+
+plot
+
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.mean.added.ident.fitted)
+```
+
+plot fitted vs actual(modified):
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual(fit5.mean.added.ident.fitted)
+```
+
+<br>
+#### parameter estimates of best fitted model on phenotype width : take fit5.mean.added.ident
+<br>
+
+    read 
+    1) population (fixed) & group level (random) effects
+    2) parameters: Hmax, k & delta of each genotype
+
+```{r}
+width.added.ident.best.fitted <- fit5.mean.added.ident$fit
+dimnames(width.added.ident.best.fitted)
+```
+
+```{r}
+width.added.ident.best.fitted.summary <- summary(width.added.ident.best.fitted)$summary
+
+write.csv(width.added.ident.best.fitted.summary, file = "/Users/seungmokim/Desktop/414_growth_model/width/width.added(individual).best.fitted.summary.csv")
+``` 
+
+<br>
+
+### widths.mean.added(mean)
+
+taking mean values of replicates
+
+```{r, message=FALSE}
+widths.mean.added.mean <- read_csv("widths.mean.added(mean).csv")
+widths.mean.added.mean
+```
+
+
+Try weibull (see http://www.pisces-conservation.com/growthhelp/index.html?weibul.htm ) 
+<br>
+
+```{r}
+stat.data(widths.mean.added.mean)
+stat.data(widths.mean) 
+```
+
+```{r results='hide'}
+weibull.bf2 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta),
+  Hmax + Hmin + k + delta ~ 1, #paramters do not vary for individuals
+  nl=TRUE)
+
+prior3.mean.added.mean <- c(prior(normal(40,10), nlpar="Hmin"),
+                             prior(normal(65,7), nlpar="Hmax"),
+                             prior(normal(1,1), nlpar="k"),
+                             prior(normal(4,1), nlpar="delta", lb=0))
+
+fit3.mean.added.mean <- brm(formula=weibull.bf2,
+                             data=widths.mean.added.mean,
+                             prior=prior3.mean.added.mean)
+```
+
+```{r}
+summary(fit3.mean.added.mean, waic=TRUE, R2=TRUE)
+```
+
+```{r results='hide', fig.keep='all'}
+plot(fit3.mean.added.mean)
+pairs(fit3.mean.added.mean)
+```
+
+
+<br>
+
+What does the fit look like?
+
+```{r}
+newdata <- data.frame(days=seq(min(widths.mean.added.mean$days), max(widths.mean.added.mean$days),1))
+fit3.mean.added.mean.fitted <-  cbind(newdata, fitted(fit3.mean.added.mean, newdata)) %>%
+  as.tibble() %>%
+  rename(width=Estimate, lower.ci='2.5%ile', upper.ci='97.5%ile')
+```
+
+plot
+```{r results='hide', fig.keep='all'}
+pl <- ggplot(aes(x=days, y=width),data=NULL)
+pl <- pl + geom_line(aes(group=ID), alpha=.1, data=widths.mean.added.mean)
+pl + geom_line(color="skyblue", lwd=1.5, data=fit3.mean.added.mean.fitted) +
+  ggtitle("width.mean vs. days")
+```
+<br>
+
+**Now try adding random effects for model parameters:**
+<br>
+
+try with only fixing Hmin
+
+```{r}
+weibull.bf3 <- bf(
+  width ~ Hmax - (Hmax - Hmin) * exp(-((k/100)*days)^delta), #Weibull model
+  Hmax + k + delta ~ (1|ID), # vary for individuals
+  Hmin ~ 1, # do not vary per individual
+  nl=TRUE)
+```
+
+
+```{r results='hide'}
+prior4.mean.added.mean <- c(prior(normal(40,10), nlpar="Hmin"),
+                             prior(normal(65,7), nlpar="Hmax"),
+                             prior(normal(1,1), nlpar="k"),
+                             prior(normal(8,.5), nlpar="delta", lb=0),
+                             prior(cauchy(0,1), class=sigma),
+                             prior(cauchy(0,7), class=sd, nlpar="Hmax"),
+                             prior(cauchy(0,.5), class=sd, nlpar="delta"),
+                             prior(cauchy(0,1), class=sd, nlpar="k"))
+
+fit5.mean.added.mean <- brm(formula=weibull.bf3,
+                             data=widths.mean.added.mean,
+                             prior=prior4.mean.added.mean,
+                             iter=5000)
+```
+
+```{r}
+summary(fit5.mean.added.mean, waic=TRUE, R2=TRUE)
+```
+
+```{r}
+#plot(fit5.mean.added.mean)
+```
+<br>
+
+get fitted values
+```{r}
+b <- widths.mean.added.mean %>% ungroup()
+fit5.mean.added.mean.fitted <- cbind(b, fitted(fit5.mean.added.mean)) %>% as.tibble()
+fit5.mean.added.mean.fitted
+```
+
+plot
+
+```{r results='hide', fig.keep='all'}
+plot.fitted(fit5.mean.added.mean.fitted)
+```
+
+plot fitted vs actual(modified):
+```{r results='hide', fig.keep='all'}
+plot.fitted.actual(fit5.mean.added.mean.fitted)
+```
+
+<br>
+#### parameter estimates of best fitted model on phenotype width : take fit5.mean.added.mean
+<br>
+
+    read 
+    1) population (fixed) & group level (random) effects
+    2) parameters: Hmax, k & delta of each genotype
+
+```{r}
+width.added.mean.best.fitted <- fit5.mean.added.mean$fit
+dimnames(width.added.mean.best.fitted)
+```
+
+```{r}
+width.added.mean.best.fitted.summary <- summary(width.added.mean.best.fitted)$summary
+
+write.csv(width.added.mean.best.fitted.summary, file = "/Users/seungmokim/Desktop/414_growth_model/width/width.added(mean).best.fitted.summary.csv")
+``` 
+
+
+
+
